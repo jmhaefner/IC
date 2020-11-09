@@ -148,22 +148,21 @@ def find_alternate_s2_peaks(ccwfs, index,
                sipm_samp_wid = 1*units.mus,
                sipm_wfs=None, thr_sipm_s2=0):
     ccwfs = np.array(ccwfs, ndmin=2)
+    sum_wf = np.sum(ccwfs, axis=0)
+    i_max = np.argmax(sum_wf)
+    indices = np.array((i_max - 100, i_max + 100))
 
-    peaks           = []
     times           = np.arange     (ccwfs.shape[1]) * pmt_samp_wid
     widths          = np.full       (ccwfs.shape[1],   pmt_samp_wid)
-    indices_split   = split_in_peaks(index, stride)
-    selected_splits = select_peaks  (indices_split, time, length, pmt_samp_wid)
     with_sipms      = Pk is S2 and sipm_wfs is not None
 
-    for indices in selected_splits:
-        pk = build_peak(indices, times,
-                        widths, ccwfs, pmt_ids,
-                        rebin_stride,
-                        with_sipms, Pk,
-                        pmt_samp_wid, sipm_samp_wid,
-                        sipm_wfs, thr_sipm_s2)
-        peaks.append(pk)
+    peaks = [ build_peak(indices, times,
+                    widths, ccwfs, pmt_ids,
+                    rebin_stride,
+                    with_sipms, Pk,
+                    pmt_samp_wid, sipm_samp_wid,
+                    sipm_wfs, thr_sipm_s2) ]
+
     return peaks
 
 def get_pmap(ccwf, s1_indx, s2_indx, sipm_zs_wf,
@@ -179,6 +178,18 @@ def get_pmap(ccwf, s1_indx, s2_indx, sipm_zs_wf,
                            sipm_samp_wid = sipm_samp_wid,
                            **s2_params))
 
+def get_pmap_mod(ccwf, s1_indx, s2_indx, sipm_zs_wf,
+             s1_params, s2_params, thr_sipm_s2, pmt_ids,
+             pmt_samp_wid, sipm_samp_wid):
+    return PMap(find_peaks(ccwf, s1_indx, Pk=S1, pmt_ids=pmt_ids,
+                           pmt_samp_wid=pmt_samp_wid,
+                           **s1_params),
+                find_alternate_s2_peaks(ccwf, s2_indx, Pk=S2, pmt_ids=pmt_ids,
+                           sipm_wfs      = sipm_zs_wf,
+                           thr_sipm_s2   = thr_sipm_s2,
+                           pmt_samp_wid  = pmt_samp_wid,
+                           sipm_samp_wid = sipm_samp_wid,
+                           **s2_params))
 
 def rebin_times_and_waveforms(times, widths, waveforms,
                               rebin_stride=2, slices=None):

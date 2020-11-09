@@ -539,6 +539,33 @@ def build_pmap(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
     return build_pmap
 
 
+def build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
+               s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
+               s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2):
+    s1_params = dict(time        = minmax(min = s1_tmin,
+                                          max = s1_tmax),
+                    length       = minmax(min = s1_lmin,
+                                          max = s1_lmax),
+                    stride       = s1_stride,
+                    rebin_stride = s1_rebin_stride)
+
+    s2_params = dict(time        = minmax(min = s2_tmin,
+                                          max = s2_tmax),
+                    length       = minmax(min = s2_lmin,
+                                          max = s2_lmax),
+                    stride       = s2_stride,
+                    rebin_stride = s2_rebin_stride)
+
+    datapmt = load_db.DataPMT(detector_db, run_number)
+    pmt_ids = datapmt.SensorID[datapmt.Active.astype(bool)].values
+
+    def build_pmap(ccwf, s1_indx, s2_indx, sipmzs): # -> PMap
+        return pkf.get_pmap_mod(ccwf, s1_indx, s2_indx, sipmzs,
+                            s1_params, s2_params, thr_sipm_s2, pmt_ids,
+                            pmt_samp_wid, sipm_samp_wid)
+
+    return build_pmap
+
 def calibrate_pmts(dbfile, run_number, n_MAU, thr_MAU):
     DataPMT    = load_db.DataPMT(dbfile, run_number = run_number)
     adc_to_pes = np.abs(DataPMT.adc_to_pes.values)
@@ -801,6 +828,53 @@ def compute_and_write_pmaps(detector_db, run_number, pmt_samp_wid, sipm_samp_wid
 
     # Build the PMap
     compute_pmap     = fl.map(build_pmap(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
+                                         s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
+                                         s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2),
+                              args = ("ccwfs", "s1_indices", "s2_indices", "sipm"),
+                              out  = "pmap")
+
+    # Filter events with zero peaks
+    pmaps_pass      = fl.map(check_empty_pmap, args = "pmap", out = "pmaps_pass")
+    empty_pmaps     = fl.count_filter(bool, args = "pmaps_pass")
+
+    # Define writers...
+    write_pmap_         = pmap_writer        (h5out,                compression=compression)
+    write_indx_filter_  = event_filter_writer(h5out, "s12_indices", compression=compression)
+    write_pmap_filter_  = event_filter_writer(h5out, "empty_pmap" , compression=compression)
+
+    # ... and make them sinks
+    write_pmap         = sink(write_pmap_        , args=(        "pmap", "event_number"))
+    write_indx_filter  = sink(write_indx_filter_ , args=("event_number", "indices_pass"))
+    write_pmap_filter  = sink(write_pmap_filter_ , args=("event_number",   "pmaps_pass"))
+
+    fn_list = (indices_pass,
+               fl.branch(write_indx_filter),
+               empty_indices.filter,
+               sipm_rwf_to_cal,
+               compute_pmap,
+               pmaps_pass,
+               fl.branch(write_pmap_filter),
+               empty_pmaps.filter,
+               fl.branch(write_pmap))
+
+    # Filter out simp_rwf_to_cal if it is not set
+    compute_pmaps = pipe(*filter(None, fn_list))
+
+    return compute_pmaps, empty_indices, empty_pmaps
+
+def compute_and_write_pmaps_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
+                  s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
+                  s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2,
+                  h5out, compression, sipm_rwf_to_cal=None):
+
+    # Filter events without signal over threshold
+    indices_pass    = fl.map(check_nonempty_indices,
+                             args = ("s1_indices", "s2_indices"),
+                             out = "indices_pass")
+    empty_indices   = fl.count_filter(bool, args = "indices_pass")
+
+    # Build the PMap
+    compute_pmap     = fl.map(build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
                                          s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
                                          s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2),
                               args = ("ccwfs", "s1_indices", "s2_indices", "sipm"),
