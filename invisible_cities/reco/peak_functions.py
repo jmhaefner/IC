@@ -140,6 +140,31 @@ def find_peaks(ccwfs, index,
         peaks.append(pk)
     return peaks
 
+def find_alternate_s2_peaks(ccwfs, index,
+               time, length,
+               stride, rebin_stride,
+               Pk, pmt_ids,
+               pmt_samp_wid = 25*units.ns,
+               sipm_samp_wid = 1*units.mus,
+               sipm_wfs=None, thr_sipm_s2=0):
+    ccwfs = np.array(ccwfs, ndmin=2)
+
+    peaks           = []
+    times           = np.arange     (ccwfs.shape[1]) * pmt_samp_wid
+    widths          = np.full       (ccwfs.shape[1],   pmt_samp_wid)
+    indices_split   = split_in_peaks(index, stride)
+    selected_splits = select_peaks  (indices_split, time, length, pmt_samp_wid)
+    with_sipms      = Pk is S2 and sipm_wfs is not None
+
+    for indices in selected_splits:
+        pk = build_peak(indices, times,
+                        widths, ccwfs, pmt_ids,
+                        rebin_stride,
+                        with_sipms, Pk,
+                        pmt_samp_wid, sipm_samp_wid,
+                        sipm_wfs, thr_sipm_s2)
+        peaks.append(pk)
+    return peaks
 
 def get_pmap(ccwf, s1_indx, s2_indx, sipm_zs_wf,
              s1_params, s2_params, thr_sipm_s2, pmt_ids,
