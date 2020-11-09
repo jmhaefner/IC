@@ -147,10 +147,11 @@ def find_alternate_s2_peaks(ccwfs, index,
                pmt_samp_wid = 25*units.ns,
                sipm_samp_wid = 1*units.mus,
                sipm_wfs=None, thr_sipm_s2=0):
+    bin_range = 1000
     ccwfs = np.array(ccwfs, ndmin=2)
     sum_wf = np.sum(ccwfs, axis=0)
     i_max = np.argmax(sum_wf)
-    indices = np.array((i_max - 100, i_max + 100))
+    indices = np.arange(i_max - bin_range, i_max + bin_range, 1)
 
     times           = np.arange     (ccwfs.shape[1]) * pmt_samp_wid
     widths          = np.full       (ccwfs.shape[1],   pmt_samp_wid)
