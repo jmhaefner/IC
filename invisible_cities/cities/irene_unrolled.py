@@ -18,6 +18,7 @@ This includes a number of tasks:
 """
 import tables as tb
 import numpy as np
+from scipy.optimize import curve_fit
 
 from .. reco                  import tbl_functions        as tbl
 from .. core.random_sampling  import NoiseSampler         as SiPMsNoiseSampler
@@ -47,7 +48,9 @@ from .  components import compute_and_write_pmaps_mod
 from .  components import check_nonempty_indices
 from .  components import build_pmap_mod
 
-def weighted_avg_and_std(values, weights, debug=False):
+debugging = True
+
+def weighted_avg_and_std(values, weights, debug=debugging):
     """
     Return the weighted average and standard deviation
     values, weights -- Numpy ndarrays with the same shape.
@@ -60,11 +63,13 @@ def weighted_avg_and_std(values, weights, debug=False):
     if np.sum(weights) > 0:
         average = np.average(values, weights=weights)
         variance = np.average((values-average)**2, weights=weights)
-        if debug: print('Average, variance =', average, variance)
+        if debug: print('Avg, var, std =', average, variance, variance**0.5)
         std = np.sqrt(max(0.,variance))
     else:
         if debug:
+            for i in range(10): print('! WARNING ! WARNING ! WARNING ! WARNING !')
             print('WARNING - NOT ENOUGH WEIGHTS TO CALCULATE.')
+            for i in range(10): print('! WARNING ! WARNING ! WARNING ! WARNING !')
         average = np.mean(values)
         std = 0.
 
@@ -78,6 +83,16 @@ def exp_dt(sig):
     p = [-10.00667732,  52.1855012,   12.68195726,  58.66322846, -20.11819297]
     dt = p[0] * sig**4 + p[1] * sig**3 + p[2]*sig**2 + p[3]*sig + p[4]
     return dt
+
+def gauss(x, A, m, v):
+    if v <= 0:
+        return 1e10
+    return A*np.exp(-(x-m)**2 / (2*v))
+
+def offset_gauss(x, A, m, v, C):
+    if v <= 0:
+        return 1e10
+    return C+A*np.exp(-(x-m)**2 / (2*v))
 
 @city
 def irene_unrolled(files_in, file_out, compression, event_range, print_mod, detector_db, run_number,
@@ -142,7 +157,30 @@ def irene_unrolled(files_in, file_out, compression, event_range, print_mod, dete
         print('Total rwfs:', nrwfs)
         import time
         t0 = time.time() 
+
+        window_min = 100 # Window radius 100 samples = 2500 ns radius = 5 us width
+        window_max = 500 # Window radius 500 samples = 12500 ns radius = 25 us width
+        window_step = 5 # Increase by 5 samples = 125 ns each step
+        window_ranges = np.arange(window_min, window_max, window_step)
+        nwindow = len(window_ranges)
+        event_numbers = [ k for k in range(nrwfs) ]
+        k = -1
+
+        max_events = 1
+        nevents = 0
+
+        events_prewindow_sums = [] # Sum of all signals in window from -75 to -25 us
         for rwf in rwfs:
+
+            if nevents >= max_events and max_events > 0:
+                continue
+
+            nevents += 1
+
+            k += 1
+            #if len(all_pmaps) > 0:
+            #    continue
+
             remaining = 999999.9
             if len(all_pmaps) > 0:
                 remaining = (nrwfs - len(all_pmaps)) * (time.time() - t0) / len(all_pmaps)
@@ -155,7 +193,6 @@ def irene_unrolled(files_in, file_out, compression, event_range, print_mod, dete
                 indices_pass = check_nonempty_indices(s1_indices, s2_indices)            
                 cal_sipms = calibrate_sipms(detector_db, run_number, sipm_thr)
                 sipm = cal_sipms(rwf['sipm'])
-                window_ranges = np.arange(100, 500, 1)
                 pmaps = []
                 for window_r in window_ranges:
                     pmap = build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
@@ -163,37 +200,104 @@ def irene_unrolled(files_in, file_out, compression, event_range, print_mod, dete
                                                  s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2, window_r = window_r)
                     pmaps.append(pmap( ccwfs, s1_indices, s2_indices, sipm )  )
 
+                ccwf_sum = [ sum(ccwfs[:,i]) for i in range(len(ccwfs[0])) ]
+                signal_peak = np.argmax(ccwf_sum)
+
+                start_sample = int(signal_peak - 75000 * (1 / 25.0))
+                end_sample   = int(signal_peak - 25000 * (1 / 25.0))
+                prewindow_sum    = np.sum(ccwf_sum[start_sample:end_sample])
+                events_prewindow_sums.append(prewindow_sum)
+
                 all_pmaps.append(pmaps)
             except:
                 print('EVENT FAILED')
+                event_numbers.remove(k)
                 continue
 
+        #from IPython import embed
+        #embed()
+        #quit()
 
         events_window_maxsipm = []
         events_window_Zrms = []
+        events_window_Zgauss = []
+        events_window_Wrms = []
+        events_window_Wgauss = []
+        events_window_r2 = []
+        events_window_GaussOffset = []
 
         for pmap in all_pmaps:
             window_maxsipm = []
             window_Zrms = []
-            for w in range(400): 
+            window_Zgauss = []
+            window_Wrms = []
+            window_Wgauss = []
+            window_r2 = []
+            window_GaussOffset = []         
+
+            for w in range(nwindow): 
+
+                signals = pmap[w].s2s[0].pmts.sum_over_sensors
+                times   = pmap[w].s2s[0].times
+
+                # Calculate max sipm
                 try:
-                    # Calculate for max sipm
                     imax = np.argmax(pmap[w].s2s[0].sipms.sum_over_times)
                     smax = pmap[w].s2s[0].sipms.ids[imax]
-                    window_maxsipm.append(smax)
                 except:
-                    window_maxsipm.append(-1)
+                    smax = -1
+                window_maxsipm.append(smax)
 
+                # Calculate the Zrms
                 try:
-                    # Calculate the Zrms
-                    signals = pmap[w].s2s[0].pmts.sum_over_sensors
-                    times   = pmap[w].s2s[0].times
+                    if debugging:
+                        print('CURRENT WINDOW', w, '/', nwindow)
                     mean, stdev = weighted_avg_and_std(times, signals)
                     Zrms = exp_dt(stdev/1000)
-                    window_Zrms.append(Zrms)
+                    Wrms = stdev
                 except:
+                    Wrms = -1
                     Zrms = -1
-                    window_Zrms.append(Zrms)
+                window_Zrms.append(Zrms)
+                window_Wrms.append(Wrms)
+
+                # Calculate the Zgauss
+                try:
+                    xdata, ydata = times, signals
+                    mean0, _ = weighted_avg_and_std(xdata, ydata)
+                    amp0 = np.max(ydata)
+
+                    # Get the stdev guess from the less edge dependent FWHM
+                    above_half_max = ydata > amp0 / 2
+                    start = np.argmax(above_half_max)
+                    end = len(above_half_max)-np.argmax(above_half_max[::-1])-1
+                    FWHM = xdata[end] - xdata[start]
+                    sigma0 = FWHM / (2*np.sqrt(2*np.log(2)))
+                    var0 = sigma0**2
+                    C0 = 0
+
+                    popt,  pcov  = curve_fit(gauss, xdata, ydata, p0 = (amp0, mean0, var0))
+                    popt1, pcov1 = curve_fit(offset_gauss, xdata, ydata, p0 = (amp0, mean0, var0, C0))
+                    amp, mean, var = popt
+                    ampoff, meanoff, varoff, coff = popt1
+                    stdev = var**0.5
+                    Wgauss = stdev
+                    Zgauss = exp_dt(stdev/1000)
+
+                    residuals = ydata - gauss(xdata, *popt)
+                    ss_res = np.sum(residuals**2)
+                    ss_tot = np.sum((ydata-np.mean(ydata))**2)
+                    r2 = 1 - (ss_res / ss_tot)
+
+                except:
+                    Wgauss = -1
+                    Zgauss = -1
+                    coff = 0
+                    r2 = 0
+                window_Zgauss.append(Zgauss)
+                window_Wgauss.append(Wgauss)
+                window_GaussOffset.append(coff)
+                window_r2.append(r2)
 
             # print('\nCHECKING PMAP...')
             # print('Getting signals and times')
@@ -206,32 +310,50 @@ def irene_unrolled(files_in, file_out, compression, event_range, print_mod, dete
             # Zrms = exp_dt(stdev/1000)
             # print('\tZrms =', Zrms)
             # print('\tEnergy =', pmap[200].s2s[0].total_energy)
+            events_window_Wrms.append(window_Wrms)
             events_window_Zrms.append(window_Zrms)
+            events_window_Zgauss.append(window_Zgauss)
+            events_window_Wgauss.append(window_Wgauss)
             events_window_maxsipm.append(window_maxsipm)
+            events_window_GaussOffset.append(window_GaussOffset)
+            events_window_r2.append(window_r2)
 
         DataSiPM    = load_db.DataSiPM(detector_db, run_number = run_number) 
         events_window_maxX = [ [ DataSiPM.X[max(i,0)] for i in window_maxsipm ] for window_maxsipm in events_window_maxsipm ]
         events_window_maxY = [ [ DataSiPM.Y[max(i,0)] for i in window_maxsipm ] for window_maxsipm in events_window_maxsipm ]
-        events_window_rms = [ [ all_pmaps[i][w].s2s[0].rms for w in range(400) ] for i in range(len(all_pmaps)) ]
-        events_window_width = [ [ all_pmaps[i][w].s2s[0].width for w in range(400) ] for i in range(len(all_pmaps)) ]
-        events_window_energy = [ [ all_pmaps[i][w].s2s[0].total_energy for w in range(400) ] for i in range(len(all_pmaps)) ] 
-        events_window_charge = [ [ all_pmaps[i][w].s2s[0].total_charge for w in range(400) ] for i in range(len(all_pmaps)) ]
-        events_window_sumwf = [ [ all_pmaps[i][w].s2s[0].pmts.sum_over_sensors for w in range(400) ] for i in range(len(all_pmaps)) ] 
+        events_window_rms = [ [ all_pmaps[i][w].s2s[0].rms for w in range(nwindow) ] for i in range(len(all_pmaps)) ]
+        events_window_width = [ [ all_pmaps[i][w].s2s[0].width for w in range(nwindow) ] for i in range(len(all_pmaps)) ]
+        events_window_energy = [ [ all_pmaps[i][w].s2s[0].total_energy for w in range(nwindow) ] for i in range(len(all_pmaps)) ] 
+        events_window_charge = [ [ all_pmaps[i][w].s2s[0].total_charge for w in range(nwindow) ] for i in range(len(all_pmaps)) ]
+        events_sumwf = [ all_pmaps[i][-1].s2s[0].pmts.sum_over_sensors.tolist() for i in range(len(all_pmaps)) ] 
+        events_times = [ all_pmaps[i][-1].s2s[0].times.tolist() for i in range(len(all_pmaps)) ] 
 
-        # print('Entering interactive session...')
-        # from IPython import embed
-        # embed()
-        # quit()
+        if debugging:
+            print('Wrms vectors:')
+            print(events_window_Wrms)
+            print('EVENT ENERGIES:')
+            print([ window_energy[-1] for window_energy in events_window_energy ])
 
-        fileout = open('variable_window_out.txt', 'w')
-        fileout.write('events_window_maxX='+str(events_window_maxX)+'\n')
-        fileout.write('events_window_maxY='+str(events_window_maxY)+'\n')
-        fileout.write('events_window_rms='+str(events_window_rms)+'\n')
-        fileout.write('events_window_width='+str(events_window_width)+'\n')
-        fileout.write('events_window_energy='+str(events_window_energy)+'\n')
-        fileout.write('events_window_charge='+str(events_window_charge)+'\n')
-        fileout.write('events_window_Zrms='+str(events_window_Zrms)+'\n')
-        fileout.write('events_window_sumwf='+str(events_window_sumwf)+'\n')
-        fileout.close()
+        window_out_name = file_out.replace('h5', 'json')
+        outdict  = {'events_window_maxX' : events_window_maxX,
+                    'events_window_maxY' : events_window_maxY,
+                    'events_window_rms' : events_window_rms,
+                    'events_window_width' : events_window_width,
+                    'events_window_energy' : events_window_energy,
+                    'events_window_charge' : events_window_charge,
+                    'events_window_Zrms' : events_window_Zrms,
+                    'events_window_Zgauss' : events_window_Zgauss,
+                    'events_window_Wrms' : events_window_Wrms,
+                    'events_window_Wgauss' : events_window_Wgauss,
+                    'events_window_r2' : events_window_r2,
+                    'events_window_GaussOffset' : events_window_GaussOffset,
+                    'events_sumwf' : events_sumwf,
+                    'events_times' : events_times,
+                    'event_numbers': event_numbers,
+                    'events_prewindow_sums': events_prewindow_sums}
+
+        import json
+        with open(window_out_name, 'w') as fileout:
+            json.dump(outdict, fileout)
 
         return True

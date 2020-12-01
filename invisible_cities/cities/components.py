@@ -541,7 +541,7 @@ def build_pmap(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
 
 def build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
                s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
-               s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2):
+               s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2, window_r = 500):
     s1_params = dict(time        = minmax(min = s1_tmin,
                                           max = s1_tmax),
                     length       = minmax(min = s1_lmin,
@@ -562,7 +562,7 @@ def build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
     def build_pmap(ccwf, s1_indx, s2_indx, sipmzs): # -> PMap
         return pkf.get_pmap_mod(ccwf, s1_indx, s2_indx, sipmzs,
                             s1_params, s2_params, thr_sipm_s2, pmt_ids,
-                            pmt_samp_wid, sipm_samp_wid)
+                            pmt_samp_wid, sipm_samp_wid, window_r)
 
     return build_pmap
 
@@ -876,7 +876,7 @@ def compute_and_write_pmaps_mod(detector_db, run_number, pmt_samp_wid, sipm_samp
     # Build the PMap
     compute_pmap     = fl.map(build_pmap_mod(detector_db, run_number, pmt_samp_wid, sipm_samp_wid,
                                          s1_lmax, s1_lmin, s1_rebin_stride, s1_stride, s1_tmax, s1_tmin,
-                                         s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2),
+                                         s2_lmax, s2_lmin, s2_rebin_stride, s2_stride, s2_tmax, s2_tmin, thr_sipm_s2, window_r = 500),
                               args = ("ccwfs", "s1_indices", "s2_indices", "sipm"),
                               out  = "pmap")
 

@@ -146,8 +146,8 @@ def find_alternate_s2_peaks(ccwfs, index,
                Pk, pmt_ids,
                pmt_samp_wid = 25*units.ns,
                sipm_samp_wid = 1*units.mus,
-               sipm_wfs=None, thr_sipm_s2=0):
-    bin_range = 1000
+               sipm_wfs=None, thr_sipm_s2=0, window_r = 500):
+    bin_range = window_r
     ccwfs = np.array(ccwfs, ndmin=2)
     sum_wf = np.sum(ccwfs, axis=0)
     i_max = np.argmax(sum_wf)
@@ -181,7 +181,7 @@ def get_pmap(ccwf, s1_indx, s2_indx, sipm_zs_wf,
 
 def get_pmap_mod(ccwf, s1_indx, s2_indx, sipm_zs_wf,
              s1_params, s2_params, thr_sipm_s2, pmt_ids,
-             pmt_samp_wid, sipm_samp_wid):
+             pmt_samp_wid, sipm_samp_wid, window_r = 500):
     return PMap(find_peaks(ccwf, s1_indx, Pk=S1, pmt_ids=pmt_ids,
                            pmt_samp_wid=pmt_samp_wid,
                            **s1_params),
@@ -190,6 +190,7 @@ def get_pmap_mod(ccwf, s1_indx, s2_indx, sipm_zs_wf,
                            thr_sipm_s2   = thr_sipm_s2,
                            pmt_samp_wid  = pmt_samp_wid,
                            sipm_samp_wid = sipm_samp_wid,
+                           window_r = window_r,
                            **s2_params))
 
 def rebin_times_and_waveforms(times, widths, waveforms,
